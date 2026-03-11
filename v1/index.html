@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#050508">
+<link rel="manifest" href="manifest.json">
+<title>NEON RIFT</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #050508;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: 'Courier New', monospace;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    top: 0; left: 0;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script>
+// ─── Canvas setup & scaling ────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 640, H = 480;
+
+let scale = 1, offsetX = 0, offsetY = 0, canvasW = W, canvasH = H;
+
+function resize() {
+  canvasW = window.innerWidth;
+  canvasH = window.innerHeight;
+  canvas.width  = canvasW;
+  canvas.height = canvasH;
+  canvas.style.width  = canvasW + 'px';
+  canvas.style.height = canvasH + 'px';
+  scale   = Math.min(canvasW / W, canvasH / H);
+  offsetX = (canvasW - W * scale) / 2;
+  offsetY = (canvasH - H * scale) / 2;
+}
+resize();
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 300));
+
+// Try to lock landscape for immersive feel
+if (screen.orientation && screen.orientation.lock) {
+  screen.orientation.lock('landscape').catch(() => {});
+}
+
+function toGame(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left - offsetX) / scale,
+    y: (clientY - rect.top  - offsetY) / scale
+  };
+}
+
+// ─── Palette ───────────────────────────────────────────────────────────────
+const PAL = {
+  bg:'#0d0d18', grid:'#1a1a2a',
+  player:'#e0d0ff', playerGlow:'#a060ff',
+  sword:'#c0ffee', swordGlow:'#40ffcc',
+  bullet:'#40c0e0', bulletGlow:'#00aacc',
+  enemy1:'#e04040', enemy1g:'#ff6060',
+  enemy2:'#e09020', enemy2g:'#ffcc40',
+  boss:'#c020e0', bossg:'#ff40ff',
+  hitFx:'#ffffff', dashFx:'#8040ff', heal:'#40ff80',
+  wall:'#1e2040', wallTop:'#2a2860',
+};
+
+// ─── Tilemap ───────────────────────────────────────────────────────────────
+const TILE = 32;
+const COLS = W / TILE, ROWS = H / TILE;
+const MAP = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+];
+
+function isSolid(x, y) {
+  const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+  if (tx < 0 || ty < 0 || tx >= COLS || ty >= ROWS) return true;
+  return MAP[ty][tx] === 1;
+}
+
+function resolveCollision(obj, r) {
+  const checks = [{dx:-r,dy:-r},{dx:r,dy:-r},{dx:-r,dy:r},{dx:r,dy:r}];
+  for (const c of checks) {
+    if (isSolid(obj.x + c.dx, obj.y + c.dy)) {
+      const tx = Math.floor((obj.x + c.dx) / TILE) * TILE;
+      const ty = Math.floor((obj.y + c.dy) / TILE) * TILE;
+      const ox = c.dx > 0 ? (obj.x + r) - tx : tx + TILE - (obj.x - r);
+      const oy = c.dy > 0 ? (obj.y + r) - ty : ty + TILE - (obj.y - r);
+      if (ox < oy) obj.x -= c.dx > 0 ? ox : -ox;
+      else         obj.y -= c.dy > 0 ? oy : -oy;
+    }
+  }
+}
+
+// ─── State ─────────────────────────────────────────────────────────────────
+let keys = {};
+let particles = [], bullets = [], enemyBullets = [], enemies = [];
+let slashFx = null, screenShake = 0, score = 0, wave = 1;
+let gameState = 'playing';
+let waveTransition = false, waveTransitionTimer = 0;
+
+// ─── Player ────────────────────────────────────────────────────────────────
+const player = {
+  x: W/2, y: H/2, r: 8,
+  speed: 180, maxHp: 5, hp: 5,
+  maxAmmo: 8, ammo: 8, ammoRegen: 0, ammoRegenRate: 1.5,
+  dashCd: 0, dashDuration: 0, dashVx: 0, dashVy: 0,
+  dashMaxDuration: 0.15, dashSpeed: 520, dashCooldown: 0.6,
+  invincible: 0, attackCd: 0,
+  facing: { x: 1, y: 0 },
+  healCd: 0, healCount: 2,
+  trail: [],
+};
+
+// ─── Virtual joystick ─────────────────────────────────────────────────────
+const JOY = {
+  active: false, touchId: null,
+  baseX: 0, baseY: 0, tipX: 0, tipY: 0,
+  dx: 0, dy: 0, radius: 55,
+};
+
+// ─── Action buttons (canvas coords) ───────────────────────────────────────
+const BTNS = {
+  slash: { x: W - 68,  y: H - 82,  r: 32, label: '⚔', cd: () => player.attackCd, active: false, touchId: null },
+  shoot: { x: W - 135, y: H - 52,  r: 26, label: '◎', cd: () => player.attackCd, active: false, touchId: null },
+  dash:  { x: W - 160, y: H - 120, r: 26, label: '⚡', cd: () => player.dashCd,   active: false, touchId: null },
+  heal:  { x: W - 68,  y: H - 155, r: 24, label: '+',  cd: () => player.healCd,   active: false, touchId: null },
+};
+
+// ─── Spawn ─────────────────────────────────────────────────────────────────
+const SPAWNS = [
+  {x:64,y:64},{x:W-64,y:64},{x:64,y:H-64},{x:W-64,y:H-64},
+  {x:W/2,y:64},{x:W/2,y:H-64},
+];
+
+function spawnWave(w) {
+  enemies = [];
+  const count = 3 + w * 2;
+  for (let i = 0; i < count; i++) {
+    const sp = SPAWNS[i % SPAWNS.length];
+    const isBoss = w >= 3 && i === 0;
+    const isRanged = w >= 2 && i % 3 === 2;
+    enemies.push({
+      x: sp.x + (Math.random()-.5)*20, y: sp.y + (Math.random()-.5)*20,
+      r: isBoss ? 18 : 10, vx: 0, vy: 0,
+      hp: isBoss ? 20 : isRanged ? 4 : 6,
+      maxHp: isBoss ? 20 : isRanged ? 4 : 6,
+      speed: isBoss ? 70 : isRanged ? 90 : 110 + Math.random()*30,
+      type: isBoss ? 'boss' : isRanged ? 'ranged' : 'melee',
+      shootCd: 1 + Math.random(), dashCd: 1.5 + Math.random(),
+      hitTimer: 0, wobble: Math.random()*Math.PI*2,
+    });
+  }
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+function spawnParticles(x, y, color, count, speed, life) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random()*Math.PI*2, s = speed*(0.4+Math.random()*0.6);
+    particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s,
+      life, maxLife: life, color, size: 2+Math.random()*3 });
+  }
+}
+function spawnDashTrail(x, y) {
+  particles.push({ x, y, vx:0, vy:0, life:.25, maxLife:.25,
+    color: PAL.dashFx, size:8, isDash:true });
+}
+
+// ─── Auto-aim ──────────────────────────────────────────────────────────────
+function aimDir() {
+  if (enemies.length === 0) return { nx: player.facing.x, ny: player.facing.y };
+  let best = null, bestD = Infinity;
+  for (const e of enemies) {
+    const d = Math.hypot(e.x - player.x, e.y - player.y);
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  const dx = best.x - player.x, dy = best.y - player.y;
+  const len = Math.hypot(dx, dy) || 1;
+  return { nx: dx/len, ny: dy/len };
+}
+
+// ─── Combat ────────────────────────────────────────────────────────────────
+function fireBullet() {
+  if (player.ammo <= 0) return;
+  player.ammo--;
+  player.attackCd = 0.2;
+  const { nx, ny } = aimDir();
+  bullets.push({ x: player.x, y: player.y, vx: nx*420, vy: ny*420, life: 1.2, r: 4 });
+  spawnParticles(player.x, player.y, PAL.bulletGlow, 3, 80, 0.2);
+}
+
+function meleeAttack() {
+  if (player.attackCd > 0) return;
+  player.attackCd = 0.35;
+  const { nx, ny } = aimDir();
+  slashFx = { x: player.x+nx*22, y: player.y+ny*22, nx, ny, life:.2, maxLife:.2 };
+  const REACH = 50;
+  let hit = false;
+  for (const e of enemies) {
+    const ex = e.x-player.x, ey = e.y-player.y;
+    const dot = ex*nx+ey*ny, cross = Math.abs(ex*ny-ey*nx);
+    if (dot > 0 && dot < REACH+e.r && cross < 28+e.r) {
+      e.hp -= e.type==='boss' ? 1 : 2;
+      e.hitTimer = 0.15; hit = true;
+      spawnParticles(e.x, e.y, PAL.hitFx, 8, 150, 0.3);
+      screenShake = 0.12;
+      if (e.hp <= 0) killEnemy(e);
+    }
+  }
+  if (!hit) spawnParticles(player.x+nx*30, player.y+ny*30, PAL.swordGlow, 5, 80, 0.2);
+}
+
+function killEnemy(e) {
+  const pts = e.type==='boss' ? 500 : e.type==='ranged' ? 150 : 100;
+  score += pts;
+  const col = e.type==='boss' ? PAL.bossg : e.type==='ranged' ? PAL.enemy2g : PAL.enemy1g;
+  spawnParticles(e.x, e.y, col, 16, 180, 0.5);
+  spawnParticles(e.x, e.y, PAL.hitFx, 8, 300, 0.25);
+}
+
+function hurtPlayer(dmg) {
+  if (player.invincible > 0) return;
+  player.hp -= dmg; player.invincible = 1.0; screenShake = 0.3;
+  spawnParticles(player.x, player.y, '#ff4060', 12, 200, 0.4);
+  if (player.hp <= 0) {
+    player.hp = 0; gameState = 'dead';
+    spawnParticles(player.x, player.y, PAL.playerGlow, 30, 250, 0.8);
+  }
+}
+
+function doDash(mx, my) {
+  if (player.dashCd > 0 || player.dashDuration > 0) return;
+  const dx = (mx !== 0 || my !== 0) ? mx : player.facing.x;
+  const dy = (mx !== 0 || my !== 0) ? my : player.facing.y;
+  const len = Math.hypot(dx, dy) || 1;
+  player.dashVx = dx/len * player.dashSpeed;
+  player.dashVy = dy/len * player.dashSpeed;
+  player.dashDuration = player.dashMaxDuration;
+  player.dashCd = player.dashCooldown;
+  player.invincible = Math.max(player.invincible, player.dashMaxDuration+0.05);
+  spawnParticles(player.x, player.y, PAL.dashFx, 10, 60, 0.3);
+}
+
+function doHeal() {
+  if (player.healCd > 0 || player.healCount <= 0 || player.hp >= player.maxHp) return;
+  player.hp = Math.min(player.maxHp, player.hp+2);
+  player.healCount--;
+  player.healCd = 1.5;
+  spawnParticles(player.x, player.y, PAL.heal, 15, 120, 0.5);
+}
+
+// ─── Touch input ───────────────────────────────────────────────────────────
+function isInBtn(btn, gx, gy) {
+  return Math.hypot(gx - btn.x, gy - btn.y) <= btn.r + 10;
+}
+
+document.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const { x: gx, y: gy } = toGame(t.clientX, t.clientY);
+
+    let hitBtn = false;
+    for (const [name, btn] of Object.entries(BTNS)) {
+      if (isInBtn(btn, gx, gy) && btn.touchId === null) {
+        btn.touchId = t.identifier;
+        btn.active = true;
+        hitBtn = true;
+        if (name === 'slash') meleeAttack();
+        if (name === 'shoot') fireBullet();
+        if (name === 'dash')  doDash(JOY.dx, JOY.dy);
+        if (name === 'heal')  doHeal();
+        break;
+      }
+    }
+    if (hitBtn) continue;
+
+    if (gx < W * 0.55 && !JOY.active) {
+      JOY.active = true;
+      JOY.touchId = t.identifier;
+      JOY.baseX = gx; JOY.baseY = gy;
+      JOY.tipX  = gx; JOY.tipY  = gy;
+      JOY.dx = 0; JOY.dy = 0;
+    }
+
+    if ((gameState === 'dead' || gameState === 'win') && gx > W*0.25 && gx < W*0.75 && gy > H*0.35 && gy < H*0.65) {
+      restartGame();
+    }
+  }
+}, { passive: false });
+
+document.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === JOY.touchId) {
+      const { x: gx, y: gy } = toGame(t.clientX, t.clientY);
+      const dx = gx - JOY.baseX, dy = gy - JOY.baseY;
+      const dist = Math.hypot(dx, dy);
+      const clamped = Math.min(dist, JOY.radius);
+      const angle = Math.atan2(dy, dx);
+      JOY.tipX = JOY.baseX + Math.cos(angle) * clamped;
+      JOY.tipY = JOY.baseY + Math.sin(angle) * clamped;
+      JOY.dx = dist > 8 ? Math.cos(angle) : 0;
+      JOY.dy = dist > 8 ? Math.sin(angle) : 0;
+    }
+  }
+}, { passive: false });
+
+document.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === JOY.touchId) {
+      JOY.active = false; JOY.touchId = null;
+      JOY.dx = 0; JOY.dy = 0;
+    }
+    for (const btn of Object.values(BTNS)) {
+      if (btn.touchId === t.identifier) {
+        btn.touchId = null; btn.active = false;
+      }
+    }
+  }
+}, { passive: false });
+
+// ─── Keyboard ──────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') { meleeAttack(); e.preventDefault(); }
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    const mx = (keys['KeyA']||keys['KeyQ']||keys['ArrowLeft'] ? -1 : 0) + (keys['KeyD']||keys['ArrowRight'] ? 1 : 0);
+    const my = (keys['KeyW']||keys['KeyZ']||keys['ArrowUp'] ? -1 : 0) + (keys['KeyS']||keys['ArrowDown'] ? 1 : 0);
+    doDash(mx, my);
+  }
+  if (e.code === 'KeyF') doHeal();
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+canvas.addEventListener('click', e => {
+  const { x, y } = toGame(e.clientX, e.clientY);
+  if ((gameState==='dead'||gameState==='win') && x>W*0.25&&x<W*0.75&&y>H*0.35&&y<H*0.65) restartGame();
+  else if (gameState==='playing') meleeAttack();
+});
+canvas.addEventListener('contextmenu', e => { e.preventDefault(); fireBullet(); });
+
+// ─── Restart ───────────────────────────────────────────────────────────────
+function restartGame() {
+  Object.assign(player, {
+    x: W/2, y: H/2, hp: 5, ammo: 8, ammoRegen: 0,
+    dashCd: 0, dashDuration: 0, invincible: 0, attackCd: 0,
+    healCd: 0, healCount: 2, trail: [],
+  });
+  player.facing = { x: 1, y: 0 };
+  particles = []; bullets = []; enemyBullets = [];
+  slashFx = null; screenShake = 0; score = 0; wave = 1;
+  gameState = 'playing'; waveTransition = false;
+  spawnWave(1);
+}
+
+// ─── Canvas UI (drawn in screen space) ─────────────────────────────────────
+function drawUI() {
+  const top  = Math.max(offsetY * 0.5 + 16, 16);
+  const left = Math.max(offsetX + 14, 14);
+  const orbR = 9;
+  const orbGap = 22;
+
+  // Health orbs
+  for (let i = 0; i < player.maxHp; i++) {
+    ctx.save();
+    const full = i < player.hp;
+    ctx.fillStyle = full ? '#e03060' : '#3a1a22';
+    if (full) { ctx.shadowColor = '#e03060'; ctx.shadowBlur = 9; }
+    ctx.beginPath();
+    ctx.arc(left + orbR + i * orbGap, top, orbR, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Ammo pips
+  const ammoX = left + player.maxHp * orbGap + 14;
+  for (let i = 0; i < player.maxAmmo; i++) {
+    ctx.save();
+    const full = i < player.ammo;
+    ctx.fillStyle = full ? '#40c0e0' : '#1a2a30';
+    if (full) { ctx.shadowColor = '#40c0e0'; ctx.shadowBlur = 6; }
+    ctx.fillRect(ammoX + i * 11, top - 7, 6, 14);
+    ctx.restore();
+  }
+
+  // Wave
+  ctx.save();
+  ctx.fillStyle = '#ffb040'; ctx.shadowColor = '#ff8020'; ctx.shadowBlur = 8;
+  ctx.font = 'bold 14px Courier New';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('VAGUE ' + wave, canvasW / 2, top);
+  ctx.restore();
+
+  // Score
+  ctx.save();
+  ctx.fillStyle = '#c0d0ff'; ctx.shadowColor = '#6080ff'; ctx.shadowBlur = 8;
+  ctx.font = '13px Courier New';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  ctx.fillText(score, canvasW - Math.max(offsetX, 0) - 14, top);
+  ctx.restore();
+}
+
+// ─── Overlays (screen space) ────────────────────────────────────────────────
+function drawOverlay() {
+  const fh = Math.round(canvasH * 0.09);
+  const sh = Math.round(canvasH * 0.045);
+  const sm = Math.round(canvasH * 0.032);
+
+  if (waveTransition) {
+    const t = 1 - waveTransitionTimer / 2.0;
+    ctx.save();
+    ctx.globalAlpha = Math.sin(t * Math.PI) * 0.85;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = Math.sin(t * Math.PI);
+    ctx.fillStyle = PAL.heal; ctx.shadowColor = PAL.heal; ctx.shadowBlur = 30;
+    ctx.font = `bold ${fh}px Courier New`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('VAGUE ' + wave + ' TERMINÉE', canvasW/2, canvasH/2 - sh);
+    ctx.font = `${sm}px Courier New`; ctx.fillStyle = '#c0d0ff'; ctx.shadowColor = '#6080ff';
+    ctx.fillText('+' + (wave*200) + ' pts', canvasW/2, canvasH/2 + sm);
+    ctx.restore();
+  }
+
+  if (gameState === 'dead') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.fillStyle = '#e03060'; ctx.shadowColor = '#e03060'; ctx.shadowBlur = 40;
+    ctx.font = `bold ${fh}px Courier New`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('GAME OVER', canvasW/2, canvasH/2 - sh);
+    ctx.font = `${sh}px Courier New`; ctx.fillStyle = '#c0d0ff'; ctx.shadowColor = '#6080ff'; ctx.shadowBlur = 10;
+    ctx.fillText('SCORE: ' + score, canvasW/2, canvasH/2 + sm);
+    ctx.font = `${sm}px Courier New`; ctx.fillStyle = '#5a5a8a'; ctx.shadowBlur = 0;
+    ctx.fillText('Appuyez pour rejouer', canvasW/2, canvasH/2 + sh * 1.8);
+    ctx.restore();
+  }
+
+  if (gameState === 'win') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,20,0.8)'; ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.fillStyle = PAL.heal; ctx.shadowColor = PAL.heal; ctx.shadowBlur = 40;
+    ctx.font = `bold ${fh}px Courier New`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('VICTOIRE !', canvasW/2, canvasH/2 - sh);
+    ctx.font = `${sh}px Courier New`; ctx.fillStyle = '#c0d0ff'; ctx.shadowColor = '#6080ff'; ctx.shadowBlur = 10;
+    ctx.fillText('SCORE: ' + score, canvasW/2, canvasH/2 + sm);
+    ctx.font = `${sm}px Courier New`; ctx.fillStyle = '#5a5a8a'; ctx.shadowBlur = 0;
+    ctx.fillText('Appuyez pour rejouer', canvasW/2, canvasH/2 + sh * 1.8);
+    ctx.restore();
+  }
+}
+
+// ─── Update ────────────────────────────────────────────────────────────────
+let lastTime = 0;
+function update(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  if (gameState === 'dead' || gameState === 'win') {
+    updateParticles(dt);
+    draw(); requestAnimationFrame(update);
+    return;
+  }
+
+  if (waveTransition) {
+    waveTransitionTimer -= dt;
+    updateParticles(dt); draw();
+    if (waveTransitionTimer <= 0) {
+      waveTransition = false; wave++;
+      if (wave > 5) gameState = 'win';
+      else spawnWave(wave);
+    }
+    requestAnimationFrame(update); return;
+  }
+
+  let mx = JOY.dx, my = JOY.dy;
+  if (keys['KeyA']||keys['KeyQ']||keys['ArrowLeft'])  mx -= 1;
+  if (keys['KeyD']||keys['ArrowRight']) mx += 1;
+  if (keys['KeyW']||keys['KeyZ']||keys['ArrowUp'])    my -= 1;
+  if (keys['KeyS']||keys['ArrowDown'])  my += 1;
+  const moving = mx !== 0 || my !== 0;
+  if (moving) {
+    const len = Math.hypot(mx, my) || 1;
+    player.facing.x = mx/len; player.facing.y = my/len;
+  }
+
+  if (keys['KeyE']) { fireBullet(); keys['KeyE'] = false; }
+
+  if (player.dashDuration > 0) {
+    player.dashDuration -= dt;
+    player.x += player.dashVx * dt;
+    player.y += player.dashVy * dt;
+    spawnDashTrail(player.x, player.y);
+    if (player.dashDuration <= 0) { player.dashVx = 0; player.dashVy = 0; }
+  } else {
+    const len = Math.hypot(mx, my) || 1;
+    player.x += (moving ? mx/len : 0) * player.speed * dt;
+    player.y += (moving ? my/len : 0) * player.speed * dt;
+  }
+
+  player.dashCd    = Math.max(0, player.dashCd - dt);
+  player.invincible= Math.max(0, player.invincible - dt);
+  player.attackCd  = Math.max(0, player.attackCd - dt);
+  player.healCd    = Math.max(0, player.healCd - dt);
+  resolveCollision(player, player.r);
+
+  player.trail.push({ x: player.x, y: player.y });
+  if (player.trail.length > 6) player.trail.shift();
+
+  if (enemies.length > 0) {
+    const { nx, ny } = aimDir();
+    player.facing.x = nx; player.facing.y = ny;
+  }
+
+  player.ammoRegen += dt;
+  if (player.ammoRegen >= player.ammoRegenRate && player.ammo < player.maxAmmo) {
+    player.ammo++; player.ammoRegen = 0;
+  }
+
+  enemies = enemies.filter(e => e.hp > 0);
+  for (const e of enemies) {
+    const dx = player.x-e.x, dy = player.y-e.y;
+    const dist = Math.hypot(dx,dy)||1;
+    e.hitTimer = Math.max(0, e.hitTimer - dt);
+    e.wobble += dt * 3;
+
+    if (e.type === 'melee' || e.type === 'boss') {
+      e.dashCd = Math.max(0, e.dashCd - dt);
+      if (e.type === 'boss' && e.dashCd <= 0 && dist < 200) {
+        e.vx = dx/dist*e.speed*3; e.vy = dy/dist*e.speed*3;
+        e.dashCd = 2.0;
+      } else { e.vx = dx/dist*e.speed; e.vy = dy/dist*e.speed; }
+      if (dist < e.r+player.r+2) hurtPlayer(e.type==='boss' ? 2 : 1);
+    }
+    if (e.type === 'ranged') {
+      const pref = 160;
+      if (dist < pref)        { e.vx = -dx/dist*e.speed; e.vy = -dy/dist*e.speed; }
+      else if (dist > pref+40){ e.vx = dx/dist*e.speed*.6; e.vy = dy/dist*e.speed*.6; }
+      else                    { e.vx *= 0.8; e.vy *= 0.8; }
+      e.shootCd -= dt;
+      if (e.shootCd <= 0) {
+        e.shootCd = 2 + Math.random();
+        enemyBullets.push({ x:e.x, y:e.y, vx:dx/dist*220, vy:dy/dist*220, life:2, r:5 });
+      }
+    }
+    e.x += e.vx * dt; e.y += e.vy * dt;
+    resolveCollision(e, e.r);
+  }
+
+  for (const b of bullets) {
+    b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
+    if (isSolid(b.x, b.y)) { b.life=0; spawnParticles(b.x,b.y,PAL.bulletGlow,4,80,.2); }
+    for (const e of enemies) {
+      if (Math.hypot(b.x-e.x, b.y-e.y) < e.r+b.r) {
+        b.life=0; e.hp--; e.hitTimer=0.12;
+        spawnParticles(b.x,b.y,PAL.hitFx,6,120,.25);
+        screenShake=0.08;
+        if (e.hp<=0) killEnemy(e);
+      }
+    }
+  }
+  bullets = bullets.filter(b => b.life > 0);
+
+  for (const b of enemyBullets) {
+    b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
+    if (isSolid(b.x,b.y)) { b.life=0; spawnParticles(b.x,b.y,'#e04040',4,60,.2); }
+    if (Math.hypot(b.x-player.x, b.y-player.y) < player.r+b.r) { b.life=0; hurtPlayer(1); }
+  }
+  enemyBullets = enemyBullets.filter(b => b.life > 0);
+
+  if (enemies.length === 0 && !waveTransition) {
+    waveTransition = true; waveTransitionTimer = 2.0;
+    score += wave * 200;
+    player.healCount = Math.min(player.healCount+1, 3);
+    player.ammo = player.maxAmmo;
+    spawnParticles(player.x, player.y, PAL.heal, 20, 100, 0.8);
+  }
+
+  updateParticles(dt);
+  if (slashFx) { slashFx.life -= dt; if (slashFx.life <= 0) slashFx = null; }
+  screenShake = Math.max(0, screenShake - dt*4);
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+function updateParticles(dt) {
+  for (const p of particles) {
+    p.x += p.vx*dt; p.y += p.vy*dt;
+    p.vx *= 0.9; p.vy *= 0.9; p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+// ─── Draw ──────────────────────────────────────────────────────────────────
+function draw() {
+  // Fill full screen with bg (covers letterbox bars)
+  ctx.fillStyle = PAL.bg;
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  const sx = screenShake > 0 ? (Math.random()-.5)*screenShake*14 : 0;
+  const sy = screenShake > 0 ? (Math.random()-.5)*screenShake*14 : 0;
+
+  ctx.save();
+  ctx.translate(offsetX + sx, offsetY + sy);
+  ctx.scale(scale, scale);
+
+  // Grid
+  ctx.strokeStyle = PAL.grid; ctx.lineWidth = 0.5;
+  for (let x=0; x<W; x+=TILE){ ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke(); }
+  for (let y=0; y<H; y+=TILE){ ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); }
+
+  // Tiles
+  for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++) {
+    if (MAP[r][c]===1) {
+      const x=c*TILE, y=r*TILE;
+      ctx.fillStyle=PAL.wall; ctx.fillRect(x,y,TILE,TILE);
+      ctx.fillStyle=PAL.wallTop; ctx.fillRect(x,y,TILE,5);
+      ctx.strokeStyle='#111128'; ctx.lineWidth=1; ctx.strokeRect(x,y,TILE,TILE);
+    }
+  }
+
+  // Trail
+  for (let i=0;i<player.trail.length;i++) {
+    ctx.save(); ctx.globalAlpha=(i/player.trail.length)*0.4;
+    ctx.fillStyle=PAL.playerGlow;
+    ctx.beginPath(); ctx.arc(player.trail[i].x,player.trail[i].y,player.r*.7,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Particles
+  for (const p of particles) {
+    const a = p.life/p.maxLife;
+    ctx.save(); ctx.globalAlpha=a;
+    ctx.fillStyle=p.color; ctx.shadowColor=p.color; ctx.shadowBlur=p.isDash?8:6;
+    if (p.isDash) ctx.fillRect(p.x-p.size/2,p.y-p.size/2,p.size,p.size);
+    else { ctx.beginPath(); ctx.arc(p.x,p.y,p.size*a,0,Math.PI*2); ctx.fill(); }
+    ctx.restore();
+  }
+
+  // Enemy bullets
+  for (const b of enemyBullets) {
+    ctx.save(); ctx.fillStyle=PAL.enemy1; ctx.shadowColor=PAL.enemy1g; ctx.shadowBlur=10;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); ctx.restore();
+  }
+  // Player bullets
+  for (const b of bullets) {
+    ctx.save(); ctx.fillStyle=PAL.bullet; ctx.shadowColor=PAL.bulletGlow; ctx.shadowBlur=12;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); ctx.restore();
+  }
+
+  // Enemies
+  for (const e of enemies) {
+    const hit = e.hitTimer > 0;
+    const col = e.type==='boss'?(hit?'#fff':PAL.boss):e.type==='ranged'?(hit?'#fff':PAL.enemy2):(hit?'#fff':PAL.enemy1);
+    const glow= e.type==='boss'?PAL.bossg:e.type==='ranged'?PAL.enemy2g:PAL.enemy1g;
+    const wx=Math.sin(e.wobble)*1.5, wy=Math.cos(e.wobble*1.3)*1.5;
+    ctx.save(); ctx.shadowColor=glow; ctx.shadowBlur=15; ctx.fillStyle=col;
+    if (e.type==='boss') {
+      ctx.beginPath();
+      ctx.moveTo(e.x+wx,e.y-e.r*1.4+wy); ctx.lineTo(e.x+e.r*1.2+wx,e.y+wy);
+      ctx.lineTo(e.x+wx,e.y+e.r*1.4+wy); ctx.lineTo(e.x-e.r*1.2+wx,e.y+wy);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#fff'; ctx.globalAlpha=0.15+.1*Math.sin(e.wobble*2);
+      ctx.beginPath(); ctx.arc(e.x+wx,e.y+wy,e.r*.5,0,Math.PI*2); ctx.fill();
+    } else if (e.type==='ranged') {
+      ctx.beginPath();
+      for (let i=0;i<6;i++) {
+        const a=(i/6)*Math.PI*2-Math.PI/6;
+        const px=e.x+Math.cos(a)*e.r+wx, py=e.y+Math.sin(a)*e.r+wy;
+        i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+      }
+      ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillRect(e.x-e.r+wx,e.y-e.r+wy,e.r*2,e.r*2);
+      ctx.fillStyle='#fff'; ctx.globalAlpha=0.1;
+      ctx.fillRect(e.x-e.r+wx,e.y-e.r+wy,e.r*2,3);
+    }
+    ctx.restore();
+    if (e.hp < e.maxHp) {
+      const bw=e.r*2.5, bh=3, bx=e.x-bw/2, by=e.y-e.r-8;
+      ctx.fillStyle='#1a1a1a'; ctx.fillRect(bx,by,bw,bh);
+      ctx.fillStyle=glow; ctx.fillRect(bx,by,bw*(e.hp/e.maxHp),bh);
+    }
+  }
+
+  // Slash FX
+  if (slashFx) {
+    const t=slashFx.life/slashFx.maxLife;
+    ctx.save(); ctx.globalAlpha=t;
+    ctx.strokeStyle=PAL.sword; ctx.shadowColor=PAL.swordGlow; ctx.shadowBlur=20; ctx.lineWidth=3;
+    const {x:px,y:py,nx,ny}=slashFx, perp=28*t;
+    ctx.beginPath();
+    ctx.moveTo(px-ny*perp-nx*20,py+nx*perp-ny*20);
+    ctx.quadraticCurveTo(px+nx*10,py+ny*10,px+ny*perp+nx*20,py-nx*perp+ny*20);
+    ctx.stroke(); ctx.restore();
+  }
+
+  // Player
+  {
+    const p=player;
+    const invBlink = p.invincible>0 && Math.floor(p.invincible*10)%2===0;
+    if (!invBlink) {
+      ctx.save();
+      ctx.shadowColor=PAL.playerGlow; ctx.shadowBlur=18;
+      ctx.fillStyle=PAL.player;
+      const angle=Math.atan2(p.facing.y,p.facing.x);
+      ctx.translate(p.x,p.y); ctx.rotate(angle);
+      ctx.fillRect(-p.r,-p.r,p.r*2,p.r*2);
+      ctx.fillStyle=PAL.playerGlow; ctx.shadowBlur=8;
+      ctx.fillRect(2,-3,4,3);
+      ctx.fillStyle=PAL.sword; ctx.shadowColor=PAL.swordGlow; ctx.shadowBlur=12;
+      ctx.fillRect(p.r,-2,8,2);
+      ctx.restore();
+    }
+    if (p.dashCd > 0) {
+      const frac=1-p.dashCd/p.dashCooldown;
+      ctx.save(); ctx.strokeStyle=PAL.dashFx; ctx.globalAlpha=0.5; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r+5,-Math.PI/2,-Math.PI/2+Math.PI*2*frac);
+      ctx.stroke(); ctx.restore();
+    }
+  }
+
+  // Touch controls
+  drawControls();
+
+  ctx.restore(); // end game transform (scale + offset + shake)
+
+  // Screen-space UI and overlays
+  drawUI();
+  drawOverlay();
+}
+
+// ─── Draw touch controls on canvas ────────────────────────────────────────
+function drawControls() {
+  if (JOY.active) {
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(JOY.baseX, JOY.baseY, JOY.radius, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.45;
+    ctx.fillStyle = '#a060ff';
+    ctx.beginPath();
+    ctx.arc(JOY.tipX, JOY.tipY, 20, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  } else {
+    ctx.save();
+    ctx.globalAlpha = 0.08;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4,4]);
+    ctx.beginPath();
+    ctx.arc(80, H - 80, JOY.radius, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  const btns = [
+    { key:'slash', label:'⚔',  col:'#a060ff', glow:'#c080ff' },
+    { key:'shoot', label:'◎',  col:'#40c0e0', glow:'#00aacc' },
+    { key:'dash',  label:'⚡',  col:'#8040ff', glow:'#a060ff' },
+    { key:'heal',  label:'+',  col:'#40ff80', glow:'#20cc60' },
+  ];
+  for (const def of btns) {
+    const btn = BTNS[def.key];
+    const cdVal = btn.cd();
+    const cdMax = def.key==='dash' ? player.dashCooldown :
+                  def.key==='heal' ? 1.5 : 0.35;
+    const ready = cdVal <= 0;
+    ctx.save();
+    ctx.globalAlpha = ready ? 0.75 : 0.35;
+    ctx.fillStyle = def.col;
+    ctx.shadowColor = def.glow;
+    ctx.shadowBlur = btn.active ? 20 : 10;
+    ctx.beginPath();
+    ctx.arc(btn.x, btn.y, btn.r, 0, Math.PI*2);
+    ctx.fill();
+    if (!ready && cdMax > 0) {
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = def.glow;
+      ctx.lineWidth = 3;
+      ctx.shadowBlur = 0;
+      const frac = 1 - cdVal/cdMax;
+      ctx.beginPath();
+      ctx.arc(btn.x, btn.y, btn.r+4, -Math.PI/2, -Math.PI/2+Math.PI*2*frac);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = ready ? 0.9 : 0.5;
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = def.glow;
+    ctx.shadowBlur = 6;
+    ctx.font = `bold ${def.key==='slash'?18:15}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(def.label, btn.x, btn.y);
+    ctx.restore();
+  }
+
+  if (player.healCount > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = '#40ff80';
+    ctx.font = 'bold 10px Courier New';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('×'+player.healCount, BTNS.heal.x+BTNS.heal.r-2, BTNS.heal.y-BTNS.heal.r+2);
+    ctx.restore();
+  }
+}
+
+// ─── Boot ──────────────────────────────────────────────────────────────────
+spawnWave(wave);
+requestAnimationFrame(ts => { lastTime = ts; requestAnimationFrame(update); });
+</script>
+</body>
+</html>

@@ -1,15 +1,15 @@
 {
-  "name": "NEON RIFT",
+  "name": "NEON RIFT V2",
   "short_name": "NEON RIFT",
-  "description": "Jeu d'action arcade neon",
+  "description": "Cyberpunk game — Slot Machine & Action RPG",
   "start_url": "./index.html",
   "display": "fullscreen",
-  "orientation": "landscape",
-  "background_color": "#050508",
-  "theme_color": "#050508",
+  "orientation": "any",
+  "background_color": "#05050f",
+  "theme_color": "#05050f",
   "icons": [
     {
-      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' fill='%23050508'/><rect x='224' y='64' width='64' height='384' fill='%23a060ff'/><rect x='64' y='224' width='384' height='64' fill='%23a060ff'/></svg>",
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' fill='%2305050f'/><rect x='224' y='64' width='64' height='384' fill='%239040ff'/><rect x='64' y='224' width='384' height='64' fill='%2320c8ff'/><circle cx='256' cy='256' r='40' fill='%2305050f'/><circle cx='256' cy='256' r='20' fill='%23ff3070'/></svg>",
       "sizes": "512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"
