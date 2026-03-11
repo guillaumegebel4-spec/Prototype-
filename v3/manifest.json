@@ -1,0 +1,18 @@
+{
+  "name": "NEON RIFT V3",
+  "short_name": "NEON RIFT",
+  "description": "Cyberpunk game — Upgrades, Slots & Cyber Runner",
+  "start_url": "./index.html",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#05050f",
+  "theme_color": "#05050f",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' fill='%2305050f'/><polygon points='256,48 464,176 464,336 256,464 48,336 48,176' fill='none' stroke='%23ff3070' stroke-width='24'/><polygon points='256,100 412,196 412,316 256,412 100,316 100,196' fill='none' stroke='%239040ff' stroke-width='12'/><circle cx='256' cy='256' r='48' fill='%2320c8ff' opacity='0.9'/><circle cx='256' cy='256' r='24' fill='%2305050f'/><circle cx='256' cy='256' r='10' fill='%23ff3070'/></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
