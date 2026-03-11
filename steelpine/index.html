@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2A1F14">
+<link rel="manifest" href="manifest.json">
+<title>STEELPINE</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #2A1F14;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: 'Georgia', serif;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    top: 0; left: 0;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+// ─── Canvas setup ───────────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = 640, H = 480;
+
+let scale = 1, offsetX = 0, offsetY = 0, canvasW = W, canvasH = H;
+
+function resize() {
+  canvasW = window.innerWidth;
+  canvasH = window.innerHeight;
+  canvas.width  = canvasW;
+  canvas.height = canvasH;
+  canvas.style.width  = canvasW + 'px';
+  canvas.style.height = canvasH + 'px';
+  scale   = Math.min(canvasW / W, canvasH / H);
+  offsetX = (canvasW - W * scale) / 2;
+  offsetY = (canvasH - H * scale) / 2;
+}
+resize();
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 300));
+
+if (screen.orientation && screen.orientation.lock) {
+  screen.orientation.lock('landscape').catch(() => {});
+}
+
+function toGame(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left - offsetX) / scale,
+    y: (clientY - rect.top  - offsetY) / scale
+  };
+}
+
+// ─── Palette (STEELPINE art direction) ────────────────────────────────────
+const PAL = {
+  bg:       '#F2E8D0',   // parchment
+  bgDark:   '#DDD0B0',   // darker parchment
+  grid:     '#C8B090',   // grid lines (aged paper)
+  outline:  '#2A1F14',   // comic-book outlines (dark brown)
+  player:   '#2A1F14',   // automaton player
+  playerAcc:'#8B4513',   // copper accent
+  playerGlow:'#D2691E',
+  steam:    '#5B9E4D',   // forest green steam bolt
+  steamGlow:'#3D7A30',
+  rust:     '#8B2500',   // rust red (melee)
+  rustGlow: '#CC3300',
+  ironE:    '#5A5A5A',   // iron tribe enemy
+  ironEAcc: '#9A9A9A',
+  copperE:  '#7A3B0A',   // copper tribe enemy
+  copperEAcc:'#C06020',
+  elderE:   '#1A1A5A',   // elder automaton boss
+  elderEAcc:'#4444AA',
+  hitFx:    '#CC3300',
+  dashFx:   '#8B4513',
+  repair:   '#3D7A30',
+  wall:     '#4A3520',   // dark wood/stone
+  wallTop:  '#6A5040',
+  panel:    'rgba(42,31,20,0.85)',
+  panelBorder: '#8B4513',
+};
+
+// ─── Tilemap ───────────────────────────────────────────────────────────────
+const TILE = 32;
+const COLS = W / TILE, ROWS = H / TILE;
+const MAP = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1],
+  [1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+];
+
+function isSolid(x, y) {
+  const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+  if (tx < 0 || ty < 0 || tx >= COLS || ty >= ROWS) return true;
+  return MAP[ty][tx] === 1;
+}
+
+function resolveCollision(obj, r) {
+  const checks = [{dx:-r,dy:-r},{dx:r,dy:-r},{dx:-r,dy:r},{dx:r,dy:r}];
+  for (const c of checks) {
+    if (isSolid(obj.x + c.dx, obj.y + c.dy)) {
+      const tx = Math.floor((obj.x + c.dx) / TILE) * TILE;
+      const ty = Math.floor((obj.y + c.dy) / TILE) * TILE;
+      const ox = c.dx > 0 ? (obj.x + r) - tx : tx + TILE - (obj.x - r);
+      const oy = c.dy > 0 ? (obj.y + r) - ty : ty + TILE - (obj.y - r);
+      if (ox < oy) obj.x -= c.dx > 0 ? ox : -ox;
+      else         obj.y -= c.dy > 0 ? oy : -oy;
+    }
+  }
+}
+
+// ─── State ─────────────────────────────────────────────────────────────────
+let keys = {};
+let particles = [], bullets = [], enemyBullets = [], enemies = [];
+let strikeFx = null, screenShake = 0, score = 0, wave = 1;
+let gameState = 'playing';
+let waveTransition = false, waveTransitionTimer = 0;
+
+// ─── Player (automaton warrior) ────────────────────────────────────────────
+const player = {
+  x: W/2, y: H/2, r: 9,
+  speed: 170, maxHp: 6, hp: 6,
+  maxGear: 6, gear: 6, gearRegen: 0, gearRegenRate: 2.0,
+  dashCd: 0, dashDuration: 0, dashVx: 0, dashVy: 0,
+  dashMaxDuration: 0.15, dashSpeed: 480, dashCooldown: 0.7,
+  invincible: 0, attackCd: 0,
+  facing: { x: 1, y: 0 },
+  repairCd: 0, repairCount: 2,
+  trail: [],
+  // knockback
+  kbVx: 0, kbVy: 0,
+};
+
+// ─── Virtual joystick ─────────────────────────────────────────────────────
+const JOY = {
+  active: false, touchId: null,
+  baseX: 0, baseY: 0, tipX: 0, tipY: 0,
+  dx: 0, dy: 0, radius: 55,
+};
+
+// ─── Action buttons ────────────────────────────────────────────────────────
+const BTNS = {
+  strike: { x: W - 68,  y: H - 82,  r: 32, label: '⚙', cd: () => player.attackCd, active: false, touchId: null },
+  shoot:  { x: W - 135, y: H - 52,  r: 26, label: '▲', cd: () => player.attackCd, active: false, touchId: null },
+  dash:   { x: W - 160, y: H - 120, r: 26, label: '⚡', cd: () => player.dashCd,   active: false, touchId: null },
+  repair: { x: W - 68,  y: H - 155, r: 24, label: '♦',  cd: () => player.repairCd, active: false, touchId: null },
+};
+
+// ─── Spawn points ──────────────────────────────────────────────────────────
+const SPAWNS = [
+  {x:64,y:64},{x:W-64,y:64},{x:64,y:H-64},{x:W-64,y:H-64},
+  {x:W/2,y:64},{x:W/2,y:H-64},
+];
+
+function spawnWave(w) {
+  enemies = [];
+  const count = 3 + w * 2;
+  for (let i = 0; i < count; i++) {
+    const sp = SPAWNS[i % SPAWNS.length];
+    const isElder = w >= 3 && i === 0;
+    const isCopper = w >= 2 && i % 3 === 2;
+    const type = isElder ? 'elder' : isCopper ? 'copper' : 'iron';
+    enemies.push({
+      x: sp.x + (Math.random()-.5)*20,
+      y: sp.y + (Math.random()-.5)*20,
+      r: isElder ? 17 : 10,
+      vx: 0, vy: 0,
+      hp:    isElder ? 22 : isCopper ? 5 : 7,
+      maxHp: isElder ? 22 : isCopper ? 5 : 7,
+      speed: isElder ? 65 : isCopper ? 95 : 105 + Math.random()*25,
+      type,
+      shootCd: 1.2 + Math.random(),
+      dashCd: 1.5 + Math.random(),
+      hitTimer: 0,
+      wobble: Math.random() * Math.PI * 2,
+      kbVx: 0, kbVy: 0,
+    });
+  }
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+function spawnParticles(x, y, color, count, speed, life) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random()*Math.PI*2, s = speed*(0.4+Math.random()*0.6);
+    particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s,
+      life, maxLife: life, color, size: 2+Math.random()*3 });
+  }
+}
+
+function spawnDashTrail(x, y) {
+  particles.push({ x, y, vx:0, vy:0, life:.2, maxLife:.2,
+    color: PAL.dashFx, size:10, isSquare:true });
+}
+
+// ─── Auto-aim ──────────────────────────────────────────────────────────────
+function aimDir() {
+  if (enemies.length === 0) return { nx: player.facing.x, ny: player.facing.y };
+  let best = null, bestD = Infinity;
+  for (const e of enemies) {
+    const d = Math.hypot(e.x - player.x, e.y - player.y);
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  const dx = best.x - player.x, dy = best.y - player.y;
+  const len = Math.hypot(dx, dy) || 1;
+  return { nx: dx/len, ny: dy/len };
+}
+
+// ─── Combat ────────────────────────────────────────────────────────────────
+function fireSteam() {
+  if (player.gear <= 0) return;
+  player.gear--;
+  player.attackCd = 0.22;
+  const { nx, ny } = aimDir();
+  bullets.push({ x: player.x, y: player.y, vx: nx*400, vy: ny*400, life: 1.3, r: 5 });
+  spawnParticles(player.x, player.y, PAL.steam, 3, 70, 0.25);
+}
+
+function strikeAttack() {
+  if (player.attackCd > 0) return;
+  player.attackCd = 0.38;
+  const { nx, ny } = aimDir();
+  strikeFx = { x: player.x+nx*24, y: player.y+ny*24, nx, ny, life:.22, maxLife:.22 };
+  const REACH = 52;
+  let hit = false;
+  for (const e of enemies) {
+    const ex = e.x-player.x, ey = e.y-player.y;
+    const dot = ex*nx+ey*ny, cross = Math.abs(ex*ny-ey*nx);
+    if (dot > 0 && dot < REACH+e.r && cross < 30+e.r) {
+      e.hp -= e.type==='elder' ? 1 : 2;
+      e.hitTimer = 0.18; hit = true;
+      // knockback
+      e.kbVx = nx*200; e.kbVy = ny*200;
+      spawnParticles(e.x, e.y, PAL.hitFx, 10, 140, 0.35);
+      spawnParticles(e.x, e.y, PAL.rust, 5, 200, 0.2);
+      screenShake = 0.14;
+      if (e.hp <= 0) killEnemy(e);
+    }
+  }
+  if (!hit) spawnParticles(player.x+nx*32, player.y+ny*32, PAL.rust, 5, 80, 0.2);
+}
+
+function killEnemy(e) {
+  const pts = e.type==='elder' ? 500 : e.type==='copper' ? 150 : 100;
+  score += pts;
+  const col = e.type==='elder' ? PAL.elderEAcc : e.type==='copper' ? PAL.copperEAcc : PAL.ironEAcc;
+  spawnParticles(e.x, e.y, col, 18, 170, 0.55);
+  spawnParticles(e.x, e.y, PAL.rust, 8, 280, 0.28);
+  spawnParticles(e.x, e.y, PAL.bgDark, 6, 100, 0.4);
+}
+
+function hurtPlayer(dmg) {
+  if (player.invincible > 0) return;
+  player.hp -= dmg; player.invincible = 0.9; screenShake = 0.28;
+  spawnParticles(player.x, player.y, PAL.rust, 12, 180, 0.45);
+  spawnParticles(player.x, player.y, PAL.hitFx, 6, 120, 0.3);
+  if (player.hp <= 0) {
+    player.hp = 0; gameState = 'dead';
+    spawnParticles(player.x, player.y, PAL.player, 30, 220, 0.9);
+    spawnParticles(player.x, player.y, PAL.rust, 20, 300, 0.6);
+  }
+}
+
+function doDash(mx, my) {
+  if (player.dashCd > 0 || player.dashDuration > 0) return;
+  const dx = (mx !== 0 || my !== 0) ? mx : player.facing.x;
+  const dy = (mx !== 0 || my !== 0) ? my : player.facing.y;
+  const len = Math.hypot(dx, dy) || 1;
+  player.dashVx = dx/len * player.dashSpeed;
+  player.dashVy = dy/len * player.dashSpeed;
+  player.dashDuration = player.dashMaxDuration;
+  player.dashCd = player.dashCooldown;
+  player.invincible = Math.max(player.invincible, player.dashMaxDuration+0.05);
+  spawnParticles(player.x, player.y, PAL.playerAcc, 12, 55, 0.3);
+}
+
+function doRepair() {
+  if (player.repairCd > 0 || player.repairCount <= 0 || player.hp >= player.maxHp) return;
+  player.hp = Math.min(player.maxHp, player.hp+2);
+  player.repairCount--;
+  player.repairCd = 1.8;
+  spawnParticles(player.x, player.y, PAL.repair, 18, 110, 0.6);
+  spawnParticles(player.x, player.y, PAL.steam, 8, 60, 0.4);
+}
+
+// ─── Touch input ───────────────────────────────────────────────────────────
+function isInBtn(btn, gx, gy) {
+  return Math.hypot(gx - btn.x, gy - btn.y) <= btn.r + 10;
+}
+
+document.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const { x: gx, y: gy } = toGame(t.clientX, t.clientY);
+
+    let hitBtn = false;
+    for (const [name, btn] of Object.entries(BTNS)) {
+      if (isInBtn(btn, gx, gy) && btn.touchId === null) {
+        btn.touchId = t.identifier;
+        btn.active = true;
+        hitBtn = true;
+        if (name === 'strike') strikeAttack();
+        if (name === 'shoot')  fireSteam();
+        if (name === 'dash')   doDash(JOY.dx, JOY.dy);
+        if (name === 'repair') doRepair();
+        break;
+      }
+    }
+    if (hitBtn) continue;
+
+    if (gx < W * 0.55 && !JOY.active) {
+      JOY.active = true;
+      JOY.touchId = t.identifier;
+      JOY.baseX = gx; JOY.baseY = gy;
+      JOY.tipX  = gx; JOY.tipY  = gy;
+      JOY.dx = 0; JOY.dy = 0;
+    }
+
+    if ((gameState === 'dead' || gameState === 'win') && gx > W*0.25 && gx < W*0.75 && gy > H*0.35 && gy < H*0.65) {
+      restartGame();
+    }
+  }
+}, { passive: false });
+
+document.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === JOY.touchId) {
+      const { x: gx, y: gy } = toGame(t.clientX, t.clientY);
+      const dx = gx - JOY.baseX, dy = gy - JOY.baseY;
+      const dist = Math.hypot(dx, dy);
+      const clamped = Math.min(dist, JOY.radius);
+      const angle = Math.atan2(dy, dx);
+      JOY.tipX = JOY.baseX + Math.cos(angle) * clamped;
+      JOY.tipY = JOY.baseY + Math.sin(angle) * clamped;
+      JOY.dx = dist > 8 ? Math.cos(angle) : 0;
+      JOY.dy = dist > 8 ? Math.sin(angle) : 0;
+    }
+  }
+}, { passive: false });
+
+document.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === JOY.touchId) {
+      JOY.active = false; JOY.touchId = null;
+      JOY.dx = 0; JOY.dy = 0;
+    }
+    for (const btn of Object.values(BTNS)) {
+      if (btn.touchId === t.identifier) {
+        btn.touchId = null; btn.active = false;
+      }
+    }
+  }
+}, { passive: false });
+
+// ─── Keyboard ──────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') { strikeAttack(); e.preventDefault(); }
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    const mx = (keys['KeyA']||keys['KeyQ']||keys['ArrowLeft'] ? -1 : 0) + (keys['KeyD']||keys['ArrowRight'] ? 1 : 0);
+    const my = (keys['KeyW']||keys['KeyZ']||keys['ArrowUp'] ? -1 : 0) + (keys['KeyS']||keys['ArrowDown'] ? 1 : 0);
+    doDash(mx, my);
+  }
+  if (e.code === 'KeyF') doRepair();
+  if (e.code === 'KeyE') { fireSteam(); keys['KeyE'] = false; }
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+canvas.addEventListener('click', e => {
+  const { x, y } = toGame(e.clientX, e.clientY);
+  if ((gameState==='dead'||gameState==='win') && x>W*0.25&&x<W*0.75&&y>H*0.35&&y<H*0.65) restartGame();
+  else if (gameState==='playing') strikeAttack();
+});
+canvas.addEventListener('contextmenu', e => { e.preventDefault(); fireSteam(); });
+
+// ─── Restart ───────────────────────────────────────────────────────────────
+function restartGame() {
+  Object.assign(player, {
+    x: W/2, y: H/2, hp: 6, gear: 6, gearRegen: 0,
+    dashCd: 0, dashDuration: 0, invincible: 0, attackCd: 0,
+    repairCd: 0, repairCount: 2, trail: [],
+    kbVx: 0, kbVy: 0,
+  });
+  player.facing = { x: 1, y: 0 };
+  particles = []; bullets = []; enemyBullets = [];
+  strikeFx = null; screenShake = 0; score = 0; wave = 1;
+  gameState = 'playing'; waveTransition = false;
+  spawnWave(1);
+}
+
+// ─── Draw helpers ──────────────────────────────────────────────────────────
+function drawGear(x, y, r, col, outlineCol, rotation) {
+  // Draw a simplified gear shape
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.fillStyle = col;
+  ctx.strokeStyle = outlineCol;
+  ctx.lineWidth = 2;
+  const teeth = 8;
+  const innerR = r * 0.65;
+  const toothH = r * 0.35;
+  ctx.beginPath();
+  for (let i = 0; i < teeth * 2; i++) {
+    const a = (i / (teeth * 2)) * Math.PI * 2;
+    const rr = (i % 2 === 0) ? r + toothH * 0.5 : r;
+    ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // inner circle (hollow)
+  ctx.fillStyle = outlineCol;
+  ctx.beginPath();
+  ctx.arc(0, 0, innerR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(0, 0, innerR * 0.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawAutomaton(x, y, r, col, acc, angle, hitFlash, isBoss) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  const baseCol = hitFlash ? '#F2E8D0' : col;
+  const accCol  = hitFlash ? '#CC3300' : acc;
+  // body (square torso)
+  ctx.fillStyle = baseCol;
+  ctx.strokeStyle = PAL.outline;
+  ctx.lineWidth = 2;
+  const bw = r * 1.8, bh = r * 2;
+  ctx.fillRect(-bw/2, -bh/2, bw, bh);
+  ctx.strokeRect(-bw/2, -bh/2, bw, bh);
+  // head
+  const hw = r * 1.3, hh = r * 1.0;
+  ctx.fillStyle = baseCol;
+  ctx.fillRect(-hw/2, -bh/2 - hh, hw, hh);
+  ctx.strokeRect(-hw/2, -bh/2 - hh, hw, hh);
+  // eye(s)
+  ctx.fillStyle = accCol;
+  if (isBoss) {
+    ctx.fillRect(-5, -bh/2 - hh + 3, 4, 4);
+    ctx.fillRect(1,  -bh/2 - hh + 3, 4, 4);
+  } else {
+    ctx.fillRect(-3, -bh/2 - hh + 3, 6, 4);
+  }
+  // accent lines on torso
+  ctx.fillStyle = accCol;
+  ctx.fillRect(-bw/2 + 2, -2, bw - 4, 2);
+  if (isBoss) {
+    ctx.fillRect(-bw/2 + 2, 4, bw - 4, 2);
+  }
+  // arm/weapon direction indicator
+  ctx.fillStyle = accCol;
+  ctx.strokeStyle = PAL.outline;
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(bw/2, -3, r * 0.9, 4);
+  ctx.strokeRect(bw/2, -3, r * 0.9, 4);
+  ctx.restore();
+}
+
+function drawPlayerAutomaton(p) {
+  const invBlink = p.invincible > 0 && Math.floor(p.invincible * 10) % 2 === 0;
+  if (invBlink) return;
+  const angle = Math.atan2(p.facing.y, p.facing.x);
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(angle);
+  // shadow
+  ctx.fillStyle = 'rgba(42,31,20,0.18)';
+  ctx.beginPath();
+  ctx.ellipse(2, p.r + 3, p.r, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // body
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(angle);
+  const r = p.r;
+  // body
+  ctx.fillStyle = PAL.player;
+  ctx.strokeStyle = PAL.outline;
+  ctx.lineWidth = 2.5;
+  ctx.fillRect(-r, -r * 1.1, r * 2, r * 2.2);
+  ctx.strokeRect(-r, -r * 1.1, r * 2, r * 2.2);
+  // head
+  ctx.fillStyle = PAL.player;
+  ctx.fillRect(-r * 0.75, -r * 1.1 - r * 0.9, r * 1.5, r * 0.9);
+  ctx.strokeRect(-r * 0.75, -r * 1.1 - r * 0.9, r * 1.5, r * 0.9);
+  // visor (copper glow)
+  ctx.fillStyle = PAL.playerAcc;
+  ctx.fillRect(-r * 0.55, -r * 1.1 - r * 0.65, r * 1.1, r * 0.35);
+  // torso detail
+  ctx.fillStyle = PAL.playerAcc;
+  ctx.fillRect(-r * 0.8, -r * 0.2, r * 1.6, r * 0.25);
+  // weapon arm
+  ctx.fillStyle = PAL.playerAcc;
+  ctx.strokeStyle = PAL.outline;
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(r, -r * 0.2, r * 1.2, r * 0.4);
+  ctx.strokeRect(r, -r * 0.2, r * 1.2, r * 0.4);
+  // dash cooldown arc
+  if (p.dashCd > 0) {
+    const frac = 1 - p.dashCd / p.dashCooldown;
+    ctx.strokeStyle = PAL.playerGlow;
+    ctx.globalAlpha = 0.6;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 6, -Math.PI/2, -Math.PI/2 + Math.PI*2*frac);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ─── HUD ───────────────────────────────────────────────────────────────────
+function drawUI() {
+  const top  = Math.max(offsetY * 0.5 + 16, 16);
+  const left = Math.max(offsetX + 14, 14);
+
+  // Comic-panel header bar background
+  ctx.save();
+  ctx.fillStyle = PAL.panel;
+  ctx.strokeStyle = PAL.panelBorder;
+  ctx.lineWidth = 2;
+  ctx.fillRect(left - 6, top - 14, 260, 28);
+  ctx.strokeRect(left - 6, top - 14, 260, 28);
+  ctx.restore();
+
+  // HP icons (gear shapes)
+  for (let i = 0; i < player.maxHp; i++) {
+    const full = i < player.hp;
+    ctx.save();
+    ctx.shadowColor = full ? PAL.rust : 'transparent';
+    ctx.shadowBlur = full ? 6 : 0;
+    ctx.fillStyle = full ? PAL.rust : 'rgba(42,31,20,0.4)';
+    ctx.strokeStyle = PAL.panelBorder;
+    ctx.lineWidth = 1;
+    const gx = left + 8 + i * 20;
+    ctx.beginPath();
+    ctx.arc(gx, top, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (full) {
+      ctx.fillStyle = PAL.bg;
+      ctx.beginPath();
+      ctx.arc(gx, top, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Gear (ammo) pips
+  const gearX = left + player.maxHp * 20 + 14;
+  for (let i = 0; i < player.maxGear; i++) {
+    const full = i < player.gear;
+    ctx.save();
+    ctx.fillStyle = full ? PAL.steam : 'rgba(42,31,20,0.35)';
+    if (full) { ctx.shadowColor = PAL.steam; ctx.shadowBlur = 5; }
+    ctx.fillRect(gearX + i * 11, top - 6, 7, 12);
+    ctx.restore();
+  }
+
+  // Wave label
+  ctx.save();
+  ctx.fillStyle = PAL.panelBorder;
+  ctx.font = 'bold 13px Georgia';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('WAVE ' + wave, canvasW / 2, top);
+  ctx.restore();
+
+  // Score
+  ctx.save();
+  ctx.fillStyle = PAL.outline;
+  ctx.font = 'bold 13px Georgia';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  ctx.fillText(score, canvasW - Math.max(offsetX, 0) - 14, top);
+  ctx.restore();
+
+  // Repair count indicator
+  if (player.repairCount > 0) {
+    ctx.save();
+    ctx.fillStyle = PAL.repair;
+    ctx.font = 'bold 10px Georgia';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('×' + player.repairCount, BTNS.repair.x + BTNS.repair.r, BTNS.repair.y - BTNS.repair.r + 2);
+    ctx.restore();
+  }
+}
+
+// ─── Overlays ──────────────────────────────────────────────────────────────
+function drawOverlay() {
+  const fh = Math.round(canvasH * 0.09);
+  const sh = Math.round(canvasH * 0.048);
+  const sm = Math.round(canvasH * 0.033);
+
+  if (waveTransition) {
+    const t = 1 - waveTransitionTimer / 2.0;
+    ctx.save();
+    ctx.globalAlpha = Math.sin(t * Math.PI) * 0.7;
+    ctx.fillStyle = PAL.bg; ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = Math.sin(t * Math.PI);
+    ctx.fillStyle = PAL.rust; ctx.shadowColor = PAL.rustGlow; ctx.shadowBlur = 25;
+    ctx.font = `bold ${fh}px Georgia`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('WAVE ' + wave + ' CLEARED', canvasW/2, canvasH/2 - sh);
+    ctx.font = `${sm}px Georgia`; ctx.fillStyle = PAL.steamGlow; ctx.shadowColor = PAL.steam;
+    ctx.fillText('+' + (wave*200) + ' pts', canvasW/2, canvasH/2 + sm);
+    ctx.restore();
+  }
+
+  if (gameState === 'dead') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(242,232,208,0.82)'; ctx.fillRect(0, 0, canvasW, canvasH);
+    // comic-book panel border
+    ctx.strokeStyle = PAL.outline; ctx.lineWidth = 6;
+    ctx.strokeRect(canvasW*0.1, canvasH*0.15, canvasW*0.8, canvasH*0.7);
+    ctx.fillStyle = PAL.rust; ctx.shadowColor = PAL.rustGlow; ctx.shadowBlur = 30;
+    ctx.font = `bold ${fh}px Georgia`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('AUTOMATON FALLS', canvasW/2, canvasH/2 - sh);
+    ctx.font = `${sh}px Georgia`; ctx.fillStyle = PAL.outline; ctx.shadowBlur = 0;
+    ctx.fillText('SCORE: ' + score, canvasW/2, canvasH/2 + sm * 0.5);
+    ctx.font = `${sm}px Georgia`; ctx.fillStyle = PAL.playerAcc; ctx.shadowBlur = 0;
+    ctx.fillText('TAP TO RESTART', canvasW/2, canvasH/2 + sh * 2);
+    ctx.restore();
+  }
+
+  if (gameState === 'win') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(242,232,208,0.88)'; ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.strokeStyle = PAL.panelBorder; ctx.lineWidth = 6;
+    ctx.strokeRect(canvasW*0.08, canvasH*0.12, canvasW*0.84, canvasH*0.76);
+    ctx.fillStyle = PAL.steamGlow; ctx.shadowColor = PAL.steam; ctx.shadowBlur = 30;
+    ctx.font = `bold ${fh}px Georgia`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('STEELPINE STANDS!', canvasW/2, canvasH/2 - sh);
+    ctx.font = `${sh}px Georgia`; ctx.fillStyle = PAL.outline; ctx.shadowBlur = 0;
+    ctx.fillText('SCORE: ' + score, canvasW/2, canvasH/2 + sm * 0.5);
+    ctx.font = `${sm}px Georgia`; ctx.fillStyle = PAL.playerAcc;
+    ctx.fillText('TAP TO PLAY AGAIN', canvasW/2, canvasH/2 + sh * 2);
+    ctx.restore();
+  }
+}
+
+// ─── Update ────────────────────────────────────────────────────────────────
+let lastTime = 0;
+let gearRotation = 0;
+
+function update(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+  gearRotation += dt * 1.2;
+
+  if (gameState === 'dead' || gameState === 'win') {
+    updateParticles(dt);
+    draw(); requestAnimationFrame(update);
+    return;
+  }
+
+  if (waveTransition) {
+    waveTransitionTimer -= dt;
+    updateParticles(dt); draw();
+    if (waveTransitionTimer <= 0) {
+      waveTransition = false; wave++;
+      if (wave > 5) gameState = 'win';
+      else spawnWave(wave);
+    }
+    requestAnimationFrame(update); return;
+  }
+
+  // Movement
+  let mx = JOY.dx, my = JOY.dy;
+  if (keys['KeyA']||keys['KeyQ']||keys['ArrowLeft'])  mx -= 1;
+  if (keys['KeyD']||keys['ArrowRight']) mx += 1;
+  if (keys['KeyW']||keys['KeyZ']||keys['ArrowUp'])    my -= 1;
+  if (keys['KeyS']||keys['ArrowDown'])  my += 1;
+  const moving = mx !== 0 || my !== 0;
+  if (moving) {
+    const len = Math.hypot(mx, my) || 1;
+    player.facing.x = mx/len; player.facing.y = my/len;
+  }
+
+  if (player.dashDuration > 0) {
+    player.dashDuration -= dt;
+    player.x += player.dashVx * dt;
+    player.y += player.dashVy * dt;
+    spawnDashTrail(player.x, player.y);
+    if (player.dashDuration <= 0) { player.dashVx = 0; player.dashVy = 0; }
+  } else {
+    const len = Math.hypot(mx, my) || 1;
+    player.x += (moving ? mx/len : 0) * player.speed * dt;
+    player.y += (moving ? my/len : 0) * player.speed * dt;
+    // apply knockback decay
+    player.x += player.kbVx * dt;
+    player.y += player.kbVy * dt;
+    player.kbVx *= 0.8; player.kbVy *= 0.8;
+    if (Math.abs(player.kbVx) < 1) player.kbVx = 0;
+    if (Math.abs(player.kbVy) < 1) player.kbVy = 0;
+  }
+
+  player.dashCd     = Math.max(0, player.dashCd - dt);
+  player.invincible = Math.max(0, player.invincible - dt);
+  player.attackCd   = Math.max(0, player.attackCd - dt);
+  player.repairCd   = Math.max(0, player.repairCd - dt);
+  resolveCollision(player, player.r);
+
+  player.trail.push({ x: player.x, y: player.y });
+  if (player.trail.length > 6) player.trail.shift();
+
+  // Auto-face nearest enemy
+  if (enemies.length > 0) {
+    const { nx, ny } = aimDir();
+    player.facing.x = nx; player.facing.y = ny;
+  }
+
+  // Gear regen
+  player.gearRegen += dt;
+  if (player.gearRegen >= player.gearRegenRate && player.gear < player.maxGear) {
+    player.gear++; player.gearRegen = 0;
+  }
+
+  // Enemy update
+  enemies = enemies.filter(e => e.hp > 0);
+  for (const e of enemies) {
+    const dx = player.x - e.x, dy = player.y - e.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    e.hitTimer = Math.max(0, e.hitTimer - dt);
+    e.wobble += dt * 2.5;
+
+    // apply knockback
+    e.x += (e.kbVx || 0) * dt;
+    e.y += (e.kbVy || 0) * dt;
+    e.kbVx = (e.kbVx || 0) * 0.75;
+    e.kbVy = (e.kbVy || 0) * 0.75;
+
+    if (e.type === 'iron' || e.type === 'elder') {
+      e.dashCd = Math.max(0, (e.dashCd||0) - dt);
+      if (e.type === 'elder' && e.dashCd <= 0 && dist < 220) {
+        e.vx = dx/dist * e.speed * 2.8;
+        e.vy = dy/dist * e.speed * 2.8;
+        e.dashCd = 2.2;
+      } else {
+        e.vx = dx/dist * e.speed;
+        e.vy = dy/dist * e.speed;
+      }
+      if (dist < e.r + player.r + 2) hurtPlayer(e.type==='elder' ? 2 : 1);
+    }
+    if (e.type === 'copper') {
+      const pref = 170;
+      if (dist < pref)         { e.vx = -dx/dist*e.speed; e.vy = -dy/dist*e.speed; }
+      else if (dist > pref+40) { e.vx = dx/dist*e.speed*0.65; e.vy = dy/dist*e.speed*0.65; }
+      else                     { e.vx *= 0.75; e.vy *= 0.75; }
+      e.shootCd -= dt;
+      if (e.shootCd <= 0) {
+        e.shootCd = 2 + Math.random();
+        enemyBullets.push({ x:e.x, y:e.y, vx:dx/dist*200, vy:dy/dist*200, life:2, r:5 });
+      }
+    }
+    e.x += e.vx * dt; e.y += e.vy * dt;
+    resolveCollision(e, e.r);
+  }
+
+  // Player bullets
+  for (const b of bullets) {
+    b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+    if (isSolid(b.x, b.y)) {
+      b.life = 0;
+      spawnParticles(b.x, b.y, PAL.steam, 5, 70, 0.2);
+    }
+    for (const e of enemies) {
+      if (Math.hypot(b.x-e.x, b.y-e.y) < e.r + b.r) {
+        b.life = 0; e.hp--; e.hitTimer = 0.14;
+        spawnParticles(b.x, b.y, PAL.hitFx, 6, 110, 0.28);
+        screenShake = 0.07;
+        if (e.hp <= 0) killEnemy(e);
+      }
+    }
+  }
+  bullets = bullets.filter(b => b.life > 0);
+
+  // Enemy bullets
+  for (const b of enemyBullets) {
+    b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+    if (isSolid(b.x, b.y)) { b.life = 0; spawnParticles(b.x, b.y, PAL.copperEAcc, 4, 60, 0.2); }
+    if (Math.hypot(b.x-player.x, b.y-player.y) < player.r + b.r) { b.life = 0; hurtPlayer(1); }
+  }
+  enemyBullets = enemyBullets.filter(b => b.life > 0);
+
+  // Wave clear check
+  if (enemies.length === 0 && !waveTransition) {
+    waveTransition = true; waveTransitionTimer = 2.2;
+    score += wave * 200;
+    player.repairCount = Math.min(player.repairCount + 1, 3);
+    player.gear = player.maxGear;
+    spawnParticles(player.x, player.y, PAL.steam, 22, 90, 0.9);
+    spawnParticles(player.x, player.y, PAL.playerAcc, 10, 140, 0.6);
+  }
+
+  updateParticles(dt);
+  if (strikeFx) { strikeFx.life -= dt; if (strikeFx.life <= 0) strikeFx = null; }
+  screenShake = Math.max(0, screenShake - dt * 4);
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+function updateParticles(dt) {
+  for (const p of particles) {
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vx *= 0.88; p.vy *= 0.88; p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+// ─── Draw ──────────────────────────────────────────────────────────────────
+function draw() {
+  // Fill letterbox bars with dark outline color
+  ctx.fillStyle = PAL.outline;
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  const sx = screenShake > 0 ? (Math.random()-.5) * screenShake * 12 : 0;
+  const sy = screenShake > 0 ? (Math.random()-.5) * screenShake * 12 : 0;
+
+  ctx.save();
+  ctx.translate(offsetX + sx, offsetY + sy);
+  ctx.scale(scale, scale);
+
+  // Parchment background
+  ctx.fillStyle = PAL.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle aged grid (comic book page texture)
+  ctx.strokeStyle = PAL.grid;
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x < W; x += TILE) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += TILE) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // Walls (dark wood/stone with bold outlines — comic panel feel)
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (MAP[r][c] === 1) {
+        const x = c * TILE, y = r * TILE;
+        // base
+        ctx.fillStyle = PAL.wall;
+        ctx.fillRect(x, y, TILE, TILE);
+        // top highlight
+        ctx.fillStyle = PAL.wallTop;
+        ctx.fillRect(x, y, TILE, 6);
+        // hatching for texture
+        ctx.strokeStyle = 'rgba(42,31,20,0.3)';
+        ctx.lineWidth = 0.8;
+        for (let h = 0; h < TILE; h += 8) {
+          ctx.beginPath();
+          ctx.moveTo(x, y + h); ctx.lineTo(x + TILE, y + h);
+          ctx.stroke();
+        }
+        // bold outline
+        ctx.strokeStyle = PAL.outline;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, TILE, TILE);
+      }
+    }
+  }
+
+  // Player trail
+  for (let i = 0; i < player.trail.length; i++) {
+    ctx.save();
+    ctx.globalAlpha = (i / player.trail.length) * 0.28;
+    ctx.fillStyle = PAL.playerAcc;
+    ctx.fillRect(player.trail[i].x - 6, player.trail[i].y - 6, 12, 12);
+    ctx.restore();
+  }
+
+  // Particles
+  for (const p of particles) {
+    const a = p.life / p.maxLife;
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color;
+    if (p.isSquare) {
+      ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size * a, p.size * a);
+    } else {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Enemy bullets (copper colored)
+  for (const b of enemyBullets) {
+    ctx.save();
+    ctx.fillStyle = PAL.copperEAcc;
+    ctx.strokeStyle = PAL.outline;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+
+  // Player bullets (steam bolts - green triangles)
+  for (const b of bullets) {
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    const a = Math.atan2(b.vy, b.vx);
+    ctx.rotate(a);
+    ctx.fillStyle = PAL.steam;
+    ctx.strokeStyle = PAL.outline;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(b.r * 1.5, 0);
+    ctx.lineTo(-b.r, -b.r * 0.7);
+    ctx.lineTo(-b.r, b.r * 0.7);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+
+  // Enemies
+  for (const e of enemies) {
+    const hit = e.hitTimer > 0;
+    const wx = Math.sin(e.wobble) * 1.2, wy = Math.cos(e.wobble * 1.3) * 1.2;
+    const angle = Math.atan2(player.y - e.y, player.x - e.x);
+
+    ctx.save();
+    ctx.translate(e.x + wx, e.y + wy);
+    ctx.rotate(angle);
+
+    const baseCol = hit ? PAL.bg : (e.type === 'elder' ? PAL.elderE : e.type === 'copper' ? PAL.copperE : PAL.ironE);
+    const accCol  = hit ? PAL.rust : (e.type === 'elder' ? PAL.elderEAcc : e.type === 'copper' ? PAL.copperEAcc : PAL.ironEAcc);
+
+    ctx.fillStyle = baseCol;
+    ctx.strokeStyle = PAL.outline;
+    ctx.lineWidth = 2;
+
+    if (e.type === 'elder') {
+      // Large elder automaton — diamond torso
+      ctx.beginPath();
+      ctx.moveTo(0, -e.r * 1.5);
+      ctx.lineTo(e.r * 1.2, 0);
+      ctx.lineTo(0, e.r * 1.5);
+      ctx.lineTo(-e.r * 1.2, 0);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      // eye
+      ctx.fillStyle = accCol;
+      ctx.beginPath(); ctx.arc(e.r * 0.4, 0, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(e.r * 0.4, 0, 3, 0, Math.PI * 2);
+      ctx.fillStyle = PAL.bg; ctx.fill();
+      // appendages
+      ctx.fillStyle = accCol;
+      ctx.strokeStyle = PAL.outline; ctx.lineWidth = 1.5;
+      ctx.fillRect(e.r * 1.2, -4, e.r * 0.6, 6);
+      ctx.strokeRect(e.r * 1.2, -4, e.r * 0.6, 6);
+    } else if (e.type === 'copper') {
+      // Copper tribe: hexagonal shape
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 - Math.PI / 6;
+        i === 0 ? ctx.moveTo(Math.cos(a)*e.r, Math.sin(a)*e.r)
+                : ctx.lineTo(Math.cos(a)*e.r, Math.sin(a)*e.r);
+      }
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      // single eye slot
+      ctx.fillStyle = accCol;
+      ctx.fillRect(e.r * 0.2, -3, e.r * 0.6, 5);
+    } else {
+      // Iron tribe: rectangular boxy automaton
+      ctx.fillRect(-e.r, -e.r * 1.1, e.r * 2, e.r * 2.2);
+      ctx.strokeRect(-e.r, -e.r * 1.1, e.r * 2, e.r * 2.2);
+      // head bump
+      ctx.fillRect(-e.r * 0.7, -e.r * 1.1 - e.r * 0.7, e.r * 1.4, e.r * 0.7);
+      ctx.strokeRect(-e.r * 0.7, -e.r * 1.1 - e.r * 0.7, e.r * 1.4, e.r * 0.7);
+      // eye
+      ctx.fillStyle = accCol;
+      ctx.fillRect(-e.r * 0.45, -e.r * 1.1 - e.r * 0.5, e.r * 0.9, e.r * 0.3);
+    }
+    ctx.restore();
+
+    // HP bar
+    if (e.hp < e.maxHp) {
+      const bw = e.r * 2.8, bh = 4, bx = e.x - bw/2, by = e.y - e.r - 14;
+      ctx.fillStyle = PAL.bgDark;
+      ctx.strokeStyle = PAL.outline;
+      ctx.lineWidth = 1;
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeRect(bx, by, bw, bh);
+      const col = e.type === 'elder' ? PAL.elderEAcc : e.type === 'copper' ? PAL.copperEAcc : PAL.ironEAcc;
+      ctx.fillStyle = col;
+      ctx.fillRect(bx, by, bw * (e.hp / e.maxHp), bh);
+    }
+  }
+
+  // Strike FX (slash arc in rust red)
+  if (strikeFx) {
+    const t = strikeFx.life / strikeFx.maxLife;
+    ctx.save();
+    ctx.globalAlpha = t;
+    ctx.strokeStyle = PAL.rust;
+    ctx.lineWidth = 4 * t;
+    const { x: px, y: py, nx, ny } = strikeFx;
+    const perp = 30 * t;
+    ctx.beginPath();
+    ctx.moveTo(px - ny * perp - nx * 20, py + nx * perp - ny * 20);
+    ctx.quadraticCurveTo(px + nx * 12, py + ny * 12, px + ny * perp + nx * 20, py - nx * perp + ny * 20);
+    ctx.stroke();
+    // impact sparks
+    ctx.fillStyle = PAL.hitFx;
+    ctx.globalAlpha = t * 0.9;
+    for (let i = 0; i < 3; i++) {
+      const ox = (Math.random() - 0.5) * 20 * t;
+      const oy = (Math.random() - 0.5) * 20 * t;
+      ctx.beginPath();
+      ctx.arc(px + ox, py + oy, 2 + Math.random() * 3 * t, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Player
+  drawPlayerAutomaton(player);
+
+  // Touch controls
+  drawControls();
+
+  ctx.restore(); // end game transform
+
+  // Screen-space HUD
+  drawUI();
+  drawOverlay();
+}
+
+// ─── Touch controls ────────────────────────────────────────────────────────
+function drawControls() {
+  // Joystick
+  if (JOY.active) {
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.strokeStyle = PAL.outline;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(JOY.baseX, JOY.baseY, JOY.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = PAL.playerAcc;
+    ctx.strokeStyle = PAL.outline;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(JOY.tipX, JOY.tipY, 20, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  } else {
+    ctx.save();
+    ctx.globalAlpha = 0.1;
+    ctx.strokeStyle = PAL.outline;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(80, H - 80, JOY.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // Action buttons
+  const defs = [
+    { key:'strike', label:'⚙', col:PAL.rust,      border:PAL.rustGlow,  cdMax: 0.38 },
+    { key:'shoot',  label:'▲', col:PAL.steam,      border:PAL.steamGlow, cdMax: 0.22 },
+    { key:'dash',   label:'⚡', col:PAL.playerAcc,  border:PAL.playerGlow,cdMax: player.dashCooldown },
+    { key:'repair', label:'♦', col:PAL.repair,     border:PAL.steamGlow, cdMax: 1.8 },
+  ];
+
+  for (const def of defs) {
+    const btn = BTNS[def.key];
+    const cdVal = btn.cd();
+    const ready = cdVal <= 0;
+    ctx.save();
+    ctx.globalAlpha = ready ? 0.82 : 0.4;
+    ctx.fillStyle = def.col;
+    ctx.strokeStyle = PAL.outline;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(btn.x, btn.y, btn.r, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+    // CD arc
+    if (!ready && def.cdMax > 0) {
+      ctx.globalAlpha = 0.6;
+      ctx.strokeStyle = def.border;
+      ctx.lineWidth = 3;
+      const frac = 1 - cdVal / def.cdMax;
+      ctx.beginPath();
+      ctx.arc(btn.x, btn.y, btn.r + 4, -Math.PI/2, -Math.PI/2 + Math.PI*2*frac);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = ready ? 0.95 : 0.55;
+    ctx.fillStyle = PAL.bg;
+    ctx.font = `bold ${def.key === 'strike' ? 18 : 15}px Arial`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(def.label, btn.x, btn.y);
+    ctx.restore();
+  }
+}
+
+// ─── Title screen ──────────────────────────────────────────────────────────
+function drawTitle() {
+  ctx.fillStyle = PAL.bg;
+  ctx.fillRect(0, 0, canvasW, canvasH);
+  // Comic panel border
+  ctx.strokeStyle = PAL.outline; ctx.lineWidth = 8;
+  ctx.strokeRect(20, 20, canvasW - 40, canvasH - 40);
+  ctx.strokeStyle = PAL.panelBorder; ctx.lineWidth = 3;
+  ctx.strokeRect(28, 28, canvasW - 56, canvasH - 56);
+
+  // Title
+  const fh = Math.round(canvasH * 0.12);
+  ctx.fillStyle = PAL.outline;
+  ctx.font = `900 ${fh}px Georgia`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('STEELPINE', canvasW/2, canvasH * 0.3);
+
+  // Subtitle
+  ctx.fillStyle = PAL.rust;
+  ctx.font = `bold ${Math.round(canvasH * 0.04)}px Georgia`;
+  ctx.fillText('AUTOMATON CHRONICLES', canvasW/2, canvasH * 0.45);
+
+  // Instructions
+  ctx.fillStyle = PAL.outline;
+  ctx.font = `${Math.round(canvasH * 0.03)}px Georgia`;
+  ctx.fillText('⚙ STRIKE    ▲ STEAM BOLT    ⚡ DASH    ♦ REPAIR', canvasW/2, canvasH * 0.6);
+
+  ctx.fillStyle = PAL.playerAcc;
+  ctx.font = `bold ${Math.round(canvasH * 0.038)}px Georgia`;
+  ctx.fillText('TAP TO DEPLOY', canvasW/2, canvasH * 0.78);
+
+  // decorative gear
+  ctx.save();
+  ctx.translate(canvasW * 0.15, canvasH * 0.5);
+  drawGear(0, 0, 35, PAL.wallTop, PAL.outline, gearRotation);
+  ctx.restore();
+  ctx.save();
+  ctx.translate(canvasW * 0.85, canvasH * 0.5);
+  drawGear(0, 0, 28, PAL.playerAcc, PAL.outline, -gearRotation * 1.4);
+  ctx.restore();
+}
+
+// ─── Boot ──────────────────────────────────────────────────────────────────
+// Title screen before game
+gameState = 'title';
+
+canvas.addEventListener('click', e => {
+  if (gameState === 'title') {
+    gameState = 'playing';
+    spawnWave(wave);
+    return;
+  }
+  const { x, y } = toGame(e.clientX, e.clientY);
+  if ((gameState==='dead'||gameState==='win') && x>W*0.25&&x<W*0.75&&y>H*0.35&&y<H*0.65) restartGame();
+  else if (gameState==='playing') strikeAttack();
+}, true); // capture phase so this fires before the previous listener
+
+document.addEventListener('touchstart', e => {
+  if (gameState === 'title') {
+    e.preventDefault();
+    gameState = 'playing';
+    spawnWave(wave);
+  }
+}, { passive: false, capture: true });
+
+function updateLoop(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+  gearRotation += dt * 1.2;
+
+  if (gameState === 'title') {
+    ctx.fillStyle = PAL.outline;
+    ctx.fillRect(0, 0, canvasW, canvasH);
+    drawTitle();
+    requestAnimationFrame(updateLoop);
+    return;
+  }
+
+  requestAnimationFrame(update);
+}
+
+requestAnimationFrame(ts => { lastTime = ts; updateLoop(ts); });
+</script>
+</body>
+</html>
